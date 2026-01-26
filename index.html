@@ -1,0 +1,838 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Walkable Ambient Rooms (4×3) — Per-Wall Images</title>
+  <style>
+    html,body{margin:0;height:100%;background:#0b0f1b;color:#e9f1ff;font-family:system-ui, -apple-system, Segoe UI, Roboto, sans-serif;}
+    #overlay{
+      position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+      background:rgba(0,0,0,.6);backdrop-filter: blur(6px);
+      z-index: 10;
+      opacity: 1;
+    }
+    .panel{
+      width:min(920px,92vw);background:#141c35;border:1px solid #5a6aa8;border-radius:16px;
+      padding:18px;box-shadow:0 10px 30px rgba(0,0,0,.35);
+    }
+    button{
+      background:#66d9ff;border:none;color:#0b0f1b;font-weight:700;padding:10px 14px;border-radius:12px;
+      cursor:pointer;
+    }
+    button:disabled{opacity:.6;cursor:not-allowed}
+    .hint{opacity:.85;line-height:1.4}
+    #hud{position:fixed;left:12px;bottom:12px;opacity:.85;font-size:13px;z-index: 5}
+    #status{
+      margin-top:12px;
+      padding:10px 12px;
+      border-radius:12px;
+      border:1px solid rgba(255,255,255,.18);
+      background:rgba(0,0,0,.22);
+      font-size:13px;
+      line-height:1.35;
+      white-space:pre-wrap;
+      display:none;
+    }
+    canvas{display:block}
+    code{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;}
+  </style>
+</head>
+<body>
+  <div id="overlay">
+    <div class="panel">
+      <h2 style="margin:0 0 10px 0;">Walkable Ambient Rooms (4×3) — Per-Wall Images</h2>
+
+      <p class="hint" style="margin:0 0 10px 0;">
+        Audio: <b>audio/room1-1.mp3 … audio/room12-4.mp3</b> (48 files).
+        Images: <b>per-wall mapping</b> for the external wall segments.
+      </p>
+
+      <p class="hint" style="margin:0 0 12px 0;">
+        Click start, then <b>WASD</b> to move, <b>mouse</b> to look. Press <b>ESC</b> to release pointer lock.
+      </p>
+
+      <button id="startBtn">Start (load audio + images)</button>
+
+      <p class="hint" style="margin:10px 0 0 0;">
+        Debug: <b>green dots</b> = doorway centres, <b>pink dots</b> = audio corner positions.
+      </p>
+
+      <div id="status"></div>
+    </div>
+  </div>
+
+  <div id="hud">WASD • Mouse look (pointer lock) • ESC to release</div>
+
+  <script src="./vendor/three.min.js"></script>
+
+  <script>
+    const overlay = document.getElementById("overlay");
+    const startBtn = document.getElementById("startBtn");
+    const statusBox = document.getElementById("status");
+    function setStatus(msg){
+      statusBox.style.display = "block";
+      statusBox.textContent = msg;
+      console.log(msg);
+    }
+    function fadeOverlayOut(){
+      overlay.style.transition = "opacity 1s";
+      overlay.style.opacity = 0;
+      setTimeout(() => overlay.style.display = "none", 1000);
+    }
+
+    if (!window.THREE) {
+      setStatus("ERROR: window.THREE is undefined (./vendor/three.min.js missing or not JS).");
+      startBtn.disabled = true;
+      throw new Error("THREE missing");
+    }
+
+    function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
+    function lerp(a,b,t){ return a + (b-a)*t; }
+
+    // ---------------- Scene ----------------
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.Fog(0x0b0f1b, 1, 320);
+
+    const camera = new THREE.PerspectiveCamera(70, innerWidth/innerHeight, 0.1, 1200);
+
+    const renderer = new THREE.WebGLRenderer({ antialias:true });
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.setPixelRatio(devicePixelRatio);
+    document.body.appendChild(renderer.domElement);
+
+    // brighter lighting
+    scene.add(new THREE.HemisphereLight(0xf7fbff, 0x0b0f1b, 2.2));
+    const sun = new THREE.DirectionalLight(0xffffff, 1.55);
+    sun.position.set(22, 36, 18);
+    scene.add(sun);
+
+    // ---------------- Layout ----------------
+    const GRID_X = 4; // columns
+    const GRID_Z = 3; // rows
+    const ROOM_COUNT = GRID_X * GRID_Z;
+
+    const ROOM_HALF = 18;
+    const ROOM_SIZE = ROOM_HALF * 2;
+
+    const WALL_H = 12;
+    const WALL_T = 0.42;
+
+    const DOOR_W = 7.0;
+    const DOOR_H = 7.0;
+    const DOOR_MARGIN_Y = 0.0;
+
+    const FLOOR_Y = 0;
+    const CEIL_Y = WALL_H;
+
+    const PLAYER_Y = 1.7;
+
+    // World extents (separate X / Z)
+    const WORLD_HALF_X = ROOM_HALF * GRID_X; // 72
+    const WORLD_HALF_Z = ROOM_HALF * GRID_Z; // 54
+
+    // collision
+    const PLAYER_R = 0.55;
+    const wallColliders = [];
+    function pushColliderFromBox(centerX, centerZ, sizeX, sizeZ){
+      wallColliders.push({
+        minX: centerX - sizeX/2,
+        maxX: centerX + sizeX/2,
+        minZ: centerZ - sizeZ/2,
+        maxZ: centerZ + sizeZ/2
+      });
+    }
+    function circleIntersectsAABB(px, pz, aabb){
+      const cx = clamp(px, aabb.minX, aabb.maxX);
+      const cz = clamp(pz, aabb.minZ, aabb.maxZ);
+      const dx = px - cx;
+      const dz = pz - cz;
+      return (dx*dx + dz*dz) < (PLAYER_R*PLAYER_R);
+    }
+
+    // ---------------- Color per room (bright floors) ----------------
+    function hsvToRgb(h, s, v){
+      let r=0,g=0,b=0;
+      const i = Math.floor(h*6);
+      const f = h*6 - i;
+      const p = v*(1-s);
+      const q = v*(1-f*s);
+      const t = v*(1-(1-f)*s);
+      switch(i%6){
+        case 0: r=v,g=t,b=p; break;
+        case 1: r=q,g=v,b=p; break;
+        case 2: r=p,g=v,b=t; break;
+        case 3: r=p,g=q,b=v; break;
+        case 4: r=t,g=p,b=v; break;
+        case 5: r=v,g=p,b=q; break;
+      }
+      return { r: Math.round(r*255), g: Math.round(g*255), b: Math.round(b*255) };
+    }
+    function hexFrom(h,s,v){
+      const {r,g,b} = hsvToRgb(h,s,v);
+      return (r<<16) | (g<<8) | b;
+    }
+
+    function brightWall(hex){
+      return new THREE.MeshStandardMaterial({
+        color: hex,
+        emissive: hex,
+        emissiveIntensity: 0.50,
+        roughness: 0.62,
+        metalness: 0.06
+      });
+    }
+
+    // Room centres (row-major: r=0 top row, c=0 left col)
+    const roomCenters = [];
+    const roomFloorMats = [];
+    for (let r=0; r<GRID_Z; r++){
+      for (let c=0; c<GRID_X; c++){
+        const x = (c - (GRID_X-1)/2) * ROOM_SIZE;
+        const z = (((GRID_Z-1)/2) - r) * ROOM_SIZE;
+        roomCenters.push(new THREE.Vector3(x, 0, z));
+
+        const hue = ((r*GRID_X + c) / (ROOM_COUNT));
+        const col = hexFrom(hue, 0.55, 0.85);
+        roomFloorMats.push(new THREE.MeshStandardMaterial({
+          color: col,
+          emissive: col,
+          emissiveIntensity: 0.10,
+          roughness: 0.95,
+          metalness: 0.0
+        }));
+      }
+    }
+
+    function addFloorCeil(center, floorMat){
+      const floor = new THREE.Mesh(new THREE.PlaneGeometry(ROOM_SIZE, ROOM_SIZE), floorMat);
+      floor.rotation.x = -Math.PI/2;
+      floor.position.set(center.x, FLOOR_Y, center.z);
+      scene.add(floor);
+
+      const ceil = new THREE.Mesh(
+        new THREE.PlaneGeometry(ROOM_SIZE, ROOM_SIZE),
+        new THREE.MeshStandardMaterial({ color: 0x162044, roughness: 1, emissive: 0x223060, emissiveIntensity: 0.10 })
+      );
+      ceil.rotation.x = Math.PI/2;
+      ceil.position.set(center.x, CEIL_Y, center.z);
+      scene.add(ceil);
+    }
+
+    // ---------------- Walls ----------------
+    const yMid = WALL_H/2;
+    const PART_LEN = ROOM_SIZE + WALL_T*2;
+
+    function addWallAlongX(centerX, z, length, thickness, material, hasDoor){
+      if (!hasDoor){
+        const w = new THREE.Mesh(new THREE.BoxGeometry(length, WALL_H, thickness), material);
+        w.position.set(centerX, yMid, z);
+        scene.add(w);
+        pushColliderFromBox(centerX, z, length, thickness);
+        return;
+      }
+      const sideLen = (length - DOOR_W) / 2;
+
+      const left = new THREE.Mesh(new THREE.BoxGeometry(sideLen, WALL_H, thickness), material);
+      left.position.set(centerX - (DOOR_W/2 + sideLen/2), yMid, z);
+      scene.add(left);
+      pushColliderFromBox(left.position.x, z, sideLen, thickness);
+
+      const right = new THREE.Mesh(new THREE.BoxGeometry(sideLen, WALL_H, thickness), material);
+      right.position.set(centerX + (DOOR_W/2 + sideLen/2), yMid, z);
+      scene.add(right);
+      pushColliderFromBox(right.position.x, z, sideLen, thickness);
+
+      const headerH = WALL_H - DOOR_H - DOOR_MARGIN_Y;
+      if (headerH > 0.01){
+        const header = new THREE.Mesh(new THREE.BoxGeometry(DOOR_W, headerH, thickness), material);
+        header.position.set(centerX, DOOR_MARGIN_Y + DOOR_H + headerH/2, z);
+        scene.add(header);
+      }
+    }
+
+    function addWallAlongZ(x, centerZ, length, thickness, material, hasDoor){
+      if (!hasDoor){
+        const w = new THREE.Mesh(new THREE.BoxGeometry(thickness, WALL_H, length), material);
+        w.position.set(x, yMid, centerZ);
+        scene.add(w);
+        pushColliderFromBox(x, centerZ, thickness, length);
+        return;
+      }
+      const sideLen = (length - DOOR_W) / 2;
+
+      const near = new THREE.Mesh(new THREE.BoxGeometry(thickness, WALL_H, sideLen), material);
+      near.position.set(x, yMid, centerZ - (DOOR_W/2 + sideLen/2));
+      scene.add(near);
+      pushColliderFromBox(x, near.position.z, thickness, sideLen);
+
+      const far = new THREE.Mesh(new THREE.BoxGeometry(thickness, WALL_H, sideLen), material);
+      far.position.set(x, yMid, centerZ + (DOOR_W/2 + sideLen/2));
+      scene.add(far);
+      pushColliderFromBox(x, far.position.z, thickness, sideLen);
+
+      const headerH = WALL_H - DOOR_H - DOOR_MARGIN_Y;
+      if (headerH > 0.01){
+        const header = new THREE.Mesh(new THREE.BoxGeometry(thickness, headerH, DOOR_W), material);
+        header.position.set(x, DOOR_MARGIN_Y + DOOR_H + headerH/2, centerZ);
+        scene.add(header);
+      }
+    }
+
+    function addCornerPost(x, z, mat){
+      const s = WALL_T * 2.4;
+      const post = new THREE.Mesh(new THREE.BoxGeometry(s, WALL_H, s), mat);
+      post.position.set(x, yMid, z);
+      scene.add(post);
+      pushColliderFromBox(x, z, s, s);
+    }
+
+    function addMarker(pos, hex, size=0.24){
+      const m = new THREE.Mesh(
+        new THREE.SphereGeometry(size, 18, 18),
+        new THREE.MeshStandardMaterial({ color: hex, emissive: hex, emissiveIntensity: 0.9, roughness: 0.35 })
+      );
+      m.position.copy(pos);
+      scene.add(m);
+      return m;
+    }
+
+    // Build floors/ceilings
+    for (let i=0; i<roomCenters.length; i++){
+      addFloorCeil(roomCenters[i], roomFloorMats[i]);
+    }
+
+    // Outer boundary (solid)
+    const outerMat = brightWall(0x4e78ff);
+    // North / South
+    addWallAlongX(0,  WORLD_HALF_Z + WALL_T/2, WORLD_HALF_X*2 + WALL_T*2, WALL_T, outerMat, false);
+    addWallAlongX(0, -WORLD_HALF_Z - WALL_T/2, WORLD_HALF_X*2 + WALL_T*2, WALL_T, outerMat, false);
+    // East / West
+    addWallAlongZ( WORLD_HALF_X + WALL_T/2, 0, WORLD_HALF_Z*2 + WALL_T*2, WALL_T, outerMat, false);
+    addWallAlongZ(-WORLD_HALF_X - WALL_T/2, 0, WORLD_HALF_Z*2 + WALL_T*2, WALL_T, outerMat, false);
+
+    // Interior partitions with centred doors
+    // Vertical partitions (between columns): x = -18, +18, +54
+    const vMat = brightWall(0x2f45a8);
+    const vWallsX = [];
+    for (let i=1; i<GRID_X; i++){
+      vWallsX.push(-WORLD_HALF_X + i*ROOM_SIZE);
+    }
+    const zCenters = [];
+    for (let r=0; r<GRID_Z; r++){
+      zCenters.push((((GRID_Z-1)/2) - r) * ROOM_SIZE);
+    }
+    for (const x of vWallsX){
+      for (const zCenter of zCenters){
+        addWallAlongZ(x, zCenter, PART_LEN, WALL_T, vMat, true);
+        addMarker(new THREE.Vector3(x, 1.2, zCenter), 0x63ff95, 0.20);
+      }
+    }
+
+    // Horizontal partitions (between rows): z = +18, -18
+    const hMat = brightWall(0x3e2fa8);
+    const hWallsZ = [];
+    for (let r=1; r<GRID_Z; r++){
+      hWallsZ.push(WORLD_HALF_Z - r*ROOM_SIZE);
+    }
+    const xCenters = [];
+    for (let c=0; c<GRID_X; c++){
+      xCenters.push((c - (GRID_X-1)/2) * ROOM_SIZE);
+    }
+    for (const z of hWallsZ){
+      for (const xCenter of xCenters){
+        addWallAlongX(xCenter, z, PART_LEN, WALL_T, hMat, true);
+        addMarker(new THREE.Vector3(xCenter, 1.2, z), 0x63ff95, 0.20);
+      }
+    }
+
+    // Posts at interior intersections
+    const postMat = brightWall(0x6aa9ff);
+    for (const x of vWallsX){
+      for (const z of hWallsZ){
+        addCornerPost(x, z, postMat);
+      }
+    }
+
+    // ---------------- Corner (audio) positions ----------------
+    const CORNER_INSET = 1.6;
+    function roomCornerPositions(center){
+      const xW = center.x - (ROOM_HALF - CORNER_INSET);
+      const xE = center.x + (ROOM_HALF - CORNER_INSET);
+      const zN = center.z + (ROOM_HALF - CORNER_INSET);
+      const zS = center.z - (ROOM_HALF - CORNER_INSET);
+      const y  = PLAYER_Y;
+      return [
+        new THREE.Vector3(xW, y, zN), // 0 NW
+        new THREE.Vector3(xE, y, zN), // 1 NE
+        new THREE.Vector3(xW, y, zS), // 2 SW
+        new THREE.Vector3(xE, y, zS), // 3 SE
+      ];
+    }
+
+    const roomCorners = [];
+    for (let i=0; i<roomCenters.length; i++){
+      const corners = roomCornerPositions(roomCenters[i]);
+      roomCorners.push(corners);
+      corners.forEach(p => addMarker(new THREE.Vector3(p.x, 1.2, p.z), 0xff6bd6, 0.18));
+    }
+
+    // ===================== PER-WALL EXTERNAL IMAGES (4×3) =====================
+    // External segments:
+    // - North: 4 (top row rooms 1..4) => N[0..3]
+    // - South: 4 (bottom row rooms 9..12) => S[0..3]
+    // - West:  3 (left column rooms 1,5,9) => W[0..2]
+    // - East:  3 (right column rooms 4,8,12) => E[0..2]
+    const WALL_IMAGES = {
+      N: ["/images/n1.jpg", "/images/n2.jpg", "/images/n3.jpg", "/images/n4.jpg"],
+      S: ["/images/s9.jpg", "/images/s10.jpg", "/images/s11.jpg", "/images/s12.jpg"],
+      W: ["/images/w1.jpg", "/images/w5.jpg", "/images/w9.jpg"],
+      E: ["/images/e4.jpg", "/images/e8.jpg", "/images/e12.jpg"],
+    };
+
+    const texLoader = new THREE.TextureLoader();
+    const textureCache = new Map(); // url -> THREE.Texture
+
+    function loadTexture(url){
+      if (textureCache.has(url)) return Promise.resolve(textureCache.get(url));
+      return new Promise((resolve, reject) => {
+        texLoader.load(
+          url,
+          tex => { textureCache.set(url, tex); resolve(tex); },
+          undefined,
+          () => reject(new Error("Image load failed: " + url))
+        );
+      });
+    }
+
+    function makePictureMaterial(tex){
+      tex.wrapS = THREE.ClampToEdgeWrapping;
+      tex.wrapT = THREE.ClampToEdgeWrapping;
+      tex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+      tex.needsUpdate = true;
+      return new THREE.MeshStandardMaterial({
+        map: tex,
+        roughness: 0.85,
+        metalness: 0.0,
+        emissive: 0xffffff,
+        emissiveIntensity: 0.06
+      });
+    }
+
+    function addExternalWallPicture(whichWall, segmentCenter, segmentLength, tex){
+      const wallInnerOffset = 0.06; // avoid z-fighting
+      const pictureW = segmentLength * 0.50;
+      const pictureH = pictureW * 0.62;
+      const y = 6.2;
+
+      const mat = makePictureMaterial(tex);
+      const plane = new THREE.Mesh(new THREE.PlaneGeometry(pictureW, pictureH), mat);
+
+      if (whichWall === "N"){
+        plane.position.set(segmentCenter.x, y, WORLD_HALF_Z - wallInnerOffset);
+        plane.rotation.y = Math.PI;
+      } else if (whichWall === "S"){
+        plane.position.set(segmentCenter.x, y, -WORLD_HALF_Z + wallInnerOffset);
+        plane.rotation.y = 0;
+      } else if (whichWall === "E"){
+        plane.position.set(WORLD_HALF_X - wallInnerOffset, y, segmentCenter.z);
+        plane.rotation.y = -Math.PI/2;
+      } else if (whichWall === "W"){
+        plane.position.set(-WORLD_HALF_X + wallInnerOffset, y, segmentCenter.z);
+        plane.rotation.y = Math.PI/2;
+      }
+
+      scene.add(plane);
+      return plane;
+    }
+
+    async function buildAllExternalPicturesPerWall(){
+      // room centers for segments
+      const xCenters = [];
+      for (let c=0; c<GRID_X; c++){
+        xCenters.push((c - (GRID_X-1)/2) * ROOM_SIZE);
+      }
+      const zCenters = [];
+      for (let r=0; r<GRID_Z; r++){
+        zCenters.push((((GRID_Z-1)/2) - r) * ROOM_SIZE);
+      }
+
+      // North (4)
+      for (let i=0;i<GRID_X;i++){
+        const tex = await loadTexture(WALL_IMAGES.N[i]);
+        addExternalWallPicture("N", new THREE.Vector3(xCenters[i],0,0), ROOM_SIZE, tex);
+      }
+      // South (4)
+      for (let i=0;i<GRID_X;i++){
+        const tex = await loadTexture(WALL_IMAGES.S[i]);
+        addExternalWallPicture("S", new THREE.Vector3(xCenters[i],0,0), ROOM_SIZE, tex);
+      }
+      // East (3) top/middle/bottom
+      for (let i=0;i<GRID_Z;i++){
+        const tex = await loadTexture(WALL_IMAGES.E[i]);
+        addExternalWallPicture("E", new THREE.Vector3(0,0,zCenters[i]), ROOM_SIZE, tex);
+      }
+      // West (3)
+      for (let i=0;i<GRID_Z;i++){
+        const tex = await loadTexture(WALL_IMAGES.W[i]);
+        addExternalWallPicture("W", new THREE.Vector3(0,0,zCenters[i]), ROOM_SIZE, tex);
+      }
+    }
+
+    // ---------------- Player rig ----------------
+    const yawObject = new THREE.Object3D();
+    // start in top-left room (room 1)
+    yawObject.position.set(xCenters[0], PLAYER_Y, zCenters[0]);
+    const pitchObject = new THREE.Object3D();
+    pitchObject.add(camera);
+    yawObject.add(pitchObject);
+    scene.add(yawObject);
+
+    let isLocked = false;
+    const PI_2 = Math.PI / 2;
+
+    function requestLock(){ document.body.requestPointerLock(); }
+    document.addEventListener("pointerlockchange", () => {
+      isLocked = (document.pointerLockElement === document.body);
+    });
+    document.addEventListener("mousemove", (e) => {
+      if (!isLocked) return;
+      yawObject.rotation.y -= (e.movementX || 0) * 0.0022;
+      pitchObject.rotation.x -= (e.movementY || 0) * 0.0022;
+      pitchObject.rotation.x = Math.max(-PI_2, Math.min(PI_2, pitchObject.rotation.x));
+    });
+
+    const keys = { w:false, a:false, s:false, d:false };
+    function onKey(e, down){
+      if(e.code==="KeyW") keys.w = down;
+      if(e.code==="KeyA") keys.a = down;
+      if(e.code==="KeyS") keys.s = down;
+      if(e.code==="KeyD") keys.d = down;
+    }
+    addEventListener("keydown", e => onKey(e, true));
+    addEventListener("keyup", e => onKey(e, false));
+
+    function clampInsideWorld(pos){
+      const margin = PLAYER_R + 0.02;
+      pos.x = clamp(pos.x, -WORLD_HALF_X + margin, WORLD_HALF_X - margin);
+      pos.z = clamp(pos.z, -WORLD_HALF_Z + margin, WORLD_HALF_Z - margin);
+      pos.y = PLAYER_Y;
+    }
+
+    function moveWithCollisions(pos, delta){
+      const next = pos.clone();
+
+      next.x += delta.x;
+      clampInsideWorld(next);
+      for (const aabb of wallColliders){
+        if (circleIntersectsAABB(next.x, next.z, aabb)){
+          if (delta.x > 0) next.x = aabb.minX - PLAYER_R - 0.0005;
+          else if (delta.x < 0) next.x = aabb.maxX + PLAYER_R + 0.0005;
+        }
+      }
+
+      next.z += delta.z;
+      clampInsideWorld(next);
+      for (const aabb of wallColliders){
+        if (circleIntersectsAABB(next.x, next.z, aabb)){
+          if (delta.z > 0) next.z = aabb.minZ - PLAYER_R - 0.0005;
+          else if (delta.z < 0) next.z = aabb.maxZ + PLAYER_R + 0.0005;
+        }
+      }
+
+      next.y = PLAYER_Y;
+      pos.copy(next);
+    }
+
+    // ===================== AUDIO =====================
+    let audioCtx, master, reverbBus;
+    const sources = []; // { roomIndex, cornerIndex, node, baseGain, currentGain }
+
+    async function makeTinyImpulse(ctx, seconds=1.2){
+      const rate = ctx.sampleRate;
+      const length = Math.floor(rate * seconds);
+      const impulse = ctx.createBuffer(2, length, rate);
+      for(let ch=0; ch<2; ch++){
+        const data = impulse.getChannelData(ch);
+        for(let i=0;i<length;i++){
+          data[i] = (Math.random()*2-1) * Math.pow(1 - i/length, 3);
+        }
+      }
+      return impulse;
+    }
+
+    async function loadBuffer(ctx, url){
+      const res = await fetch(url);
+      if(!res.ok) throw new Error(`Audio fetch failed (${res.status}) for: ${url}`);
+      const arr = await res.arrayBuffer();
+      return await ctx.decodeAudioData(arr);
+    }
+
+    function createCornerSource(ctx, buffer, worldPos){
+      const src = ctx.createBufferSource();
+      src.buffer = buffer;
+      src.loop = true;
+
+      const gain = ctx.createGain();
+      gain.gain.value = 0.0;
+
+      const panner = ctx.createPanner();
+      panner.panningModel = "HRTF";
+      panner.distanceModel = "inverse";
+      panner.refDistance = 1.0;
+      panner.maxDistance = 140;
+      panner.rolloffFactor = 0.1;
+
+      panner.positionX.value = worldPos.x;
+      panner.positionY.value = worldPos.y;
+      panner.positionZ.value = worldPos.z;
+
+      const send = ctx.createGain();
+      send.gain.value = 0.04;
+
+      src.connect(gain);
+      gain.connect(panner);
+      panner.connect(master);
+
+      gain.connect(send);
+      send.connect(reverbBus);
+
+      src.start();
+      return { src, gain, panner, send };
+    }
+
+    const MIN_CORNER_REL = 0.10;
+    const CURVE_POW = 1.65;
+
+    function roomCornerMix(listenerPos, corners){
+      const dx = corners[0].x - corners[3].x;
+      const dz = corners[0].z - corners[3].z;
+      const maxD = Math.sqrt(dx*dx + dz*dz);
+
+      const raw = [];
+      let sum = 0;
+      for (let i=0;i<4;i++){
+        const ddx = listenerPos.x - corners[i].x;
+        const ddz = listenerPos.z - corners[i].z;
+        const d = Math.sqrt(ddx*ddx + ddz*ddz);
+
+        const clos = 1 - clamp(d / maxD, 0, 1);
+        const shaped = Math.pow(Math.max(0, clos), CURVE_POW);
+        const v = MIN_CORNER_REL + (1 - MIN_CORNER_REL) * shaped;
+        raw.push(v);
+        sum += v;
+      }
+      const scale = (sum > 1e-6) ? (4.0 / sum) : 1.0;
+      return raw.map(v => v * scale);
+    }
+
+    const DOOR_BLEND = 2.0;
+
+    function currentRoomIndex(pos){
+      const c = Math.round(pos.x / ROOM_SIZE + (GRID_X-1)/2);
+      const r = Math.round(((GRID_Z-1)/2) - (pos.z / ROOM_SIZE));
+      const cc = clamp(c, 0, GRID_X-1);
+      const rr = clamp(r, 0, GRID_Z-1);
+      return rr*GRID_X + cc;
+    }
+
+    function doorwayRoomWeights(pos, roomIdx){
+      const w = new Array(ROOM_COUNT).fill(0);
+      w[roomIdx] = 1;
+
+      const center = roomCenters[roomIdx];
+      const lx = pos.x - center.x;
+      const lz = pos.z - center.z;
+
+      const col = roomIdx % GRID_X;
+      const row = Math.floor(roomIdx / GRID_X);
+
+      // right
+      if (col < GRID_X-1){
+        const dist = ROOM_HALF - lx;
+        if (Math.abs(dist) <= DOOR_BLEND && Math.abs(lz) <= (DOOR_W/2 + DOOR_BLEND)){
+          const t = 1 - clamp(Math.abs(dist)/DOOR_BLEND, 0, 1);
+          w[roomIdx + 1] = Math.max(w[roomIdx + 1], t * 0.75);
+        }
+      }
+      // left
+      if (col > 0){
+        const dist = ROOM_HALF + lx;
+        if (Math.abs(dist) <= DOOR_BLEND && Math.abs(lz) <= (DOOR_W/2 + DOOR_BLEND)){
+          const t = 1 - clamp(Math.abs(dist)/DOOR_BLEND, 0, 1);
+          w[roomIdx - 1] = Math.max(w[roomIdx - 1], t * 0.75);
+        }
+      }
+      // down (south)
+      if (row < GRID_Z-1){
+        const dist = ROOM_HALF + lz;
+        if (Math.abs(dist) <= DOOR_BLEND && Math.abs(lx) <= (DOOR_W/2 + DOOR_BLEND)){
+          const t = 1 - clamp(Math.abs(dist)/DOOR_BLEND, 0, 1);
+          w[roomIdx + GRID_X] = Math.max(w[roomIdx + GRID_X], t * 0.75);
+        }
+      }
+      // up (north)
+      if (row > 0){
+        const dist = ROOM_HALF - lz;
+        if (Math.abs(dist) <= DOOR_BLEND && Math.abs(lx) <= (DOOR_W/2 + DOOR_BLEND)){
+          const t = 1 - clamp(Math.abs(dist)/DOOR_BLEND, 0, 1);
+          w[roomIdx - GRID_X] = Math.max(w[roomIdx - GRID_X], t * 0.75);
+        }
+      }
+      return w;
+    }
+
+    function applyAudio(dt){
+      if (!audioCtx) return;
+
+      const p = yawObject.position;
+
+      audioCtx.listener.positionX.value = p.x;
+      audioCtx.listener.positionY.value = p.y;
+      audioCtx.listener.positionZ.value = p.z;
+
+      const fwd = new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion).normalize();
+      audioCtx.listener.forwardX.value = fwd.x;
+      audioCtx.listener.forwardY.value = fwd.y;
+      audioCtx.listener.forwardZ.value = fwd.z;
+
+      audioCtx.listener.upX.value = 0;
+      audioCtx.listener.upY.value = 1;
+      audioCtx.listener.upZ.value = 0;
+
+      const roomIdx = currentRoomIndex(p);
+      const roomW = doorwayRoomWeights(p, roomIdx);
+
+      const follow = clamp(dt * 10.0, 0, 1);
+
+      for (const s of sources){
+        const gate = roomW[s.roomIndex] || 0;
+        if (gate <= 0.0001){
+          s.currentGain = lerp(s.currentGain, 0, follow);
+          s.node.gain.gain.value = s.currentGain;
+          continue;
+        }
+
+        const corners = roomCorners[s.roomIndex];
+        const mix = roomCornerMix(p, corners);
+        const cornerW = mix[s.cornerIndex];
+
+        const target = s.baseGain * gate * cornerW;
+
+        s.currentGain = lerp(s.currentGain, target, follow);
+        s.node.gain.gain.value = s.currentGain;
+      }
+    }
+
+    // ---------------- Start ----------------
+    startBtn.addEventListener("click", async () => {
+      try{
+        startBtn.disabled = true;
+        setStatus("Starting…\nRequesting pointer lock…");
+        requestLock();
+
+        setStatus("Loading per-wall images…");
+        await buildAllExternalPicturesPerWall();
+
+        setStatus("Creating AudioContext…");
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        await audioCtx.resume();
+
+        master = audioCtx.createGain();
+        master.gain.value = 0.75;
+        master.connect(audioCtx.destination);
+
+        const convolver = audioCtx.createConvolver();
+        convolver.buffer = await makeTinyImpulse(audioCtx, 1.2);
+
+        reverbBus = audioCtx.createGain();
+        reverbBus.gain.value = 0.35;
+        reverbBus.connect(convolver);
+        convolver.connect(master);
+
+        setStatus("Loading audio…\nExpecting audio/room1-1.mp3 … audio/room12-4.mp3");
+        const urls = [];
+        for (let roomId=1; roomId<=ROOM_COUNT; roomId++){
+          for (let corner=1; corner<=4; corner++){
+            urls.push(`audio/room${roomId}-${corner}.mp3`);
+          }
+        }
+        const buffers = await Promise.all(urls.map(u => loadBuffer(audioCtx, u)));
+
+        setStatus("Creating corner sources…");
+        let k = 0;
+        for (let roomIndex=0; roomIndex<ROOM_COUNT; roomIndex++){
+          const corners = roomCorners[roomIndex];
+          for (let cornerIndex=0; cornerIndex<4; cornerIndex++){
+            const buf = buffers[k++];
+            const node = createCornerSource(audioCtx, buf, corners[cornerIndex]);
+            sources.push({
+              roomIndex,
+              cornerIndex,
+              node,
+              baseGain: 1.0,
+              currentGain: 0
+            });
+          }
+        }
+
+        setStatus("Running ✅\nPer-wall images + audio active.");
+        fadeOverlayOut();
+
+      }catch(err){
+        setStatus(
+          "ERROR\n\n" + (err?.message ? err.message : String(err)) +
+          "\n\nFixes:\n" +
+          "- Ensure your images exist at the paths in WALL_IMAGES\n" +
+          "- Ensure audio/room1-1.mp3 … audio/room12-4.mp3 exist (48 files)\n" +
+          "- Open DevTools → Network for 404s\n"
+        );
+        startBtn.disabled = false;
+      }
+    });
+
+    // ---------------- Animate loop ----------------
+    const clock = new THREE.Clock();
+    const vel = new THREE.Vector3();
+    const moveDirVec = new THREE.Vector3();
+    const rightVec = new THREE.Vector3();
+    const forwardTmp = new THREE.Vector3();
+    const upVec = new THREE.Vector3(0,1,0);
+
+    function tick(){
+      const dt = Math.min(0.05, clock.getDelta());
+      const speed = 4.9;
+
+      moveDirVec.set(0,0,0);
+      if(keys.w) moveDirVec.z -= 1;
+      if(keys.s) moveDirVec.z += 1;
+      if(keys.a) moveDirVec.x -= 1;
+      if(keys.d) moveDirVec.x += 1;
+      if (moveDirVec.lengthSq() > 0) moveDirVec.normalize();
+
+      forwardTmp.set(0,0,-1).applyQuaternion(yawObject.quaternion);
+      forwardTmp.y = 0;
+      forwardTmp.normalize();
+      rightVec.copy(forwardTmp).cross(upVec).normalize();
+
+      vel.set(0,0,0);
+      vel.addScaledVector(forwardTmp, moveDirVec.z * speed * dt);
+      vel.addScaledVector(rightVec,  moveDirVec.x * speed * dt);
+
+      moveWithCollisions(yawObject.position, vel);
+
+      if (audioCtx) applyAudio(dt);
+
+      renderer.render(scene, camera);
+      requestAnimationFrame(tick);
+    }
+    tick();
+
+    addEventListener("resize", () => {
+      camera.aspect = innerWidth/innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    });
+  </script>
+</body>
+</html>
