@@ -383,11 +383,14 @@
     // - South: 4 (bottom row rooms 9..12) => S[0..3]
     // - West:  3 (left column rooms 1,5,9) => W[0..2]
     // - East:  3 (right column rooms 4,8,12) => E[0..2]
+    //
+    // IMPORTANT for GitHub Pages:
+    // Use RELATIVE paths (no leading "/") so it works under https://USERNAME.github.io/REPO/
     const WALL_IMAGES = {
-      N: ["/images/n1.jpg", "/images/n2.jpg", "/images/n3.jpg", "/images/n4.jpg"],
-      S: ["/images/s9.jpg", "/images/s10.jpg", "/images/s11.jpg", "/images/s12.jpg"],
-      W: ["/images/w1.jpg", "/images/w5.jpg", "/images/w9.jpg"],
-      E: ["/images/e4.jpg", "/images/e8.jpg", "/images/e12.jpg"],
+      N: ["./images/n1.jpg", "./images/n2.jpg", "./images/n3.jpg", "./images/n4.jpg"],
+      S: ["./images/s9.jpg", "./images/s10.jpg", "./images/s11.jpg", "./images/s12.jpg"],
+      W: ["./images/w1.jpg", "./images/w5.jpg", "./images/w9.jpg"],
+      E: ["./images/e4.jpg", "./images/e8.jpg", "./images/e12.jpg"],
     };
 
     const texLoader = new THREE.TextureLoader();
