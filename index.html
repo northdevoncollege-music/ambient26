@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Walkable Ambient Rooms (4×3) — Per-Wall Images</title>
+  <title>Walkable Ambient Rooms (4×3) — Per-Wall Images (WebXR)</title>
   <style>
     html,body{margin:0;height:100%;background:#0b0f1b;color:#e9f1ff;font-family:system-ui, -apple-system, Segoe UI, Roboto, sans-serif;}
     #overlay{
@@ -13,7 +13,7 @@
       opacity: 1;
     }
     .panel{
-      width:min(920px,92vw);background:#141c35;border:1px solid #5a6aa8;border-radius:16px;
+      width:min(940px,92vw);background:#141c35;border:1px solid #5a6aa8;border-radius:16px;
       padding:18px;box-shadow:0 10px 30px rgba(0,0,0,.35);
     }
     button{
@@ -34,28 +34,77 @@
       white-space:pre-wrap;
       display:none;
     }
+
+    /* Progress bar */
+    .barWrap{
+      margin-top:12px;
+      border-radius:999px;
+      border:1px solid rgba(255,255,255,.18);
+      background:rgba(0,0,0,.22);
+      overflow:hidden;
+      height:14px;
+      display:none;
+    }
+    .barFill{
+      height:100%;
+      width:0%;
+      background:linear-gradient(90deg, rgba(102,217,255,.35), rgba(102,217,255,1));
+      transition:width .12s linear;
+    }
+    .barLabel{
+      margin-top:8px;
+      font-size:12px;
+      opacity:.85;
+      display:none;
+    }
+
     canvas{display:block}
     code{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;}
+
+    /* VR button positioning (Three VRButton creates a DOM button) */
+    .vrBtnHolder{
+      margin-top:12px;
+      display:flex;
+      gap:10px;
+      align-items:center;
+      flex-wrap:wrap;
+    }
+    .vrNote{
+      font-size:12px;
+      opacity:.85;
+      line-height:1.35;
+    }
   </style>
 </head>
 <body>
   <div id="overlay">
     <div class="panel">
-      <h2 style="margin:0 0 10px 0;">Walkable Ambient Rooms (4×3) — Per-Wall Images</h2>
+      <h2 style="margin:0 0 10px 0;">Walkable Ambient Rooms (4×3) — Per-Wall Images (WebXR)</h2>
 
       <p class="hint" style="margin:0 0 10px 0;">
-        Audio: <b>audio/room1-1.mp3 … audio/room12-4.mp3</b> (48 files).
-        Images: <b>per-wall mapping</b> for the external wall segments.
+        Audio: <b>audio/room1-1.mp3 … audio/room12-4.mp3</b> (48 files).<br/>
+        Images: <b>per-wall mapping</b> for external wall segments.
       </p>
 
       <p class="hint" style="margin:0 0 12px 0;">
-        Click start, then <b>WASD</b> to move, <b>mouse</b> to look. Press <b>ESC</b> to release pointer lock.
+        Desktop: <b>WASD</b> move, <b>mouse</b> look (pointer lock), <b>ESC</b> release.<br/>
+        Quest / VR: <b>Left stick</b> move, <b>Right stick</b> snap turn.
       </p>
 
       <button id="startBtn">Start (load audio + images)</button>
 
-      <p class="hint" style="margin:10px 0 0 0;">
-        Debug: <b>green dots</b> = doorway centres, <b>pink dots</b> = audio corner positions.
+      <div class="barWrap" id="barWrap"><div class="barFill" id="barFill"></div></div>
+      <div class="barLabel" id="barLabel">Loading…</div>
+
+      <div class="vrBtnHolder" id="vrHolder" style="display:none;">
+        <!-- VRButton will be injected here -->
+        <span class="vrNote">
+          After loading completes, tap <b>Enter VR</b> (Quest Browser). If VR is unsupported, it will show a message.
+        </span>
+      </div>
+
+      <p class="hint" style="margin:12px 0 0 0;">
+        Debug: <b>green dots</b> doorway centres, <b>pink dots</b> audio corner positions.
       </p>
 
       <div id="status"></div>
@@ -70,10 +119,26 @@
     const overlay = document.getElementById("overlay");
     const startBtn = document.getElementById("startBtn");
     const statusBox = document.getElementById("status");
+    const barWrap = document.getElementById("barWrap");
+    const barFill = document.getElementById("barFill");
+    const barLabel = document.getElementById("barLabel");
+    const vrHolder = document.getElementById("vrHolder");
+
     function setStatus(msg){
       statusBox.style.display = "block";
       statusBox.textContent = msg;
       console.log(msg);
+    }
+    function showProgress(label, pct){
+      barWrap.style.display = "block";
+      barLabel.style.display = "block";
+      barLabel.textContent = label;
+      barFill.style.width = `${Math.max(0, Math.min(100, pct))}%`;
+    }
+    function hideProgress(){
+      barWrap.style.display = "none";
+      barLabel.style.display = "none";
+      barFill.style.width = "0%";
     }
     function fadeOverlayOut(){
       overlay.style.transition = "opacity 1s";
@@ -90,6 +155,13 @@
     function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
     function lerp(a,b,t){ return a + (b-a)*t; }
 
+    // ---------------- GitHub Pages-safe asset URLs ----------------
+    const BASE_URL = new URL("./", window.location.href);
+    function asset(relPath){
+      const clean = String(relPath).replace(/^\//, "");
+      return new URL(clean, BASE_URL).toString();
+    }
+
     // ---------------- Scene ----------------
     const scene = new THREE.Scene();
     scene.fog = new THREE.Fog(0x0b0f1b, 1, 320);
@@ -99,6 +171,7 @@
     const renderer = new THREE.WebGLRenderer({ antialias:true });
     renderer.setSize(innerWidth, innerHeight);
     renderer.setPixelRatio(devicePixelRatio);
+    renderer.xr.enabled = true; // ✅ WebXR
     document.body.appendChild(renderer.domElement);
 
     // brighter lighting
@@ -127,7 +200,7 @@
 
     const PLAYER_Y = 1.7;
 
-    // World extents (separate X / Z)
+    // World extents
     const WORLD_HALF_X = ROOM_HALF * GRID_X; // 72
     const WORLD_HALF_Z = ROOM_HALF * GRID_Z; // 54
 
@@ -183,7 +256,7 @@
       });
     }
 
-    // Room centres (row-major: r=0 top row, c=0 left col)
+    // Room centres (row-major)
     const roomCenters = [];
     const roomFloorMats = [];
     for (let r=0; r<GRID_Z; r++){
@@ -304,15 +377,12 @@
 
     // Outer boundary (solid)
     const outerMat = brightWall(0x4e78ff);
-    // North / South
     addWallAlongX(0,  WORLD_HALF_Z + WALL_T/2, WORLD_HALF_X*2 + WALL_T*2, WALL_T, outerMat, false);
     addWallAlongX(0, -WORLD_HALF_Z - WALL_T/2, WORLD_HALF_X*2 + WALL_T*2, WALL_T, outerMat, false);
-    // East / West
     addWallAlongZ( WORLD_HALF_X + WALL_T/2, 0, WORLD_HALF_Z*2 + WALL_T*2, WALL_T, outerMat, false);
     addWallAlongZ(-WORLD_HALF_X - WALL_T/2, 0, WORLD_HALF_Z*2 + WALL_T*2, WALL_T, outerMat, false);
 
     // Interior partitions with centred doors
-    // Vertical partitions (between columns): x = -18, +18, +54
     const vMat = brightWall(0x2f45a8);
     const vWallsX = [];
     for (let i=1; i<GRID_X; i++){
@@ -329,7 +399,6 @@
       }
     }
 
-    // Horizontal partitions (between rows): z = +18, -18
     const hMat = brightWall(0x3e2fa8);
     const hWallsZ = [];
     for (let r=1; r<GRID_Z; r++){
@@ -378,19 +447,11 @@
     }
 
     // ===================== PER-WALL EXTERNAL IMAGES (4×3) =====================
-    // External segments:
-    // - North: 4 (top row rooms 1..4) => N[0..3]
-    // - South: 4 (bottom row rooms 9..12) => S[0..3]
-    // - West:  3 (left column rooms 1,5,9) => W[0..2]
-    // - East:  3 (right column rooms 4,8,12) => E[0..2]
-    //
-    // IMPORTANT for GitHub Pages:
-    // Use RELATIVE paths (no leading "/") so it works under https://USERNAME.github.io/REPO/
     const WALL_IMAGES = {
-      N: ["./images/n1.jpg", "./images/n2.jpg", "./images/n3.jpg", "./images/n4.jpg"],
-      S: ["./images/s9.jpg", "./images/s10.jpg", "./images/s11.jpg", "./images/s12.jpg"],
-      W: ["./images/w1.jpg", "./images/w5.jpg", "./images/w9.jpg"],
-      E: ["./images/e4.jpg", "./images/e8.jpg", "./images/e12.jpg"],
+      N: [asset("images/n1.jpg"), asset("images/n2.jpg"), asset("images/n3.jpg"), asset("images/n4.jpg")],
+      S: [asset("images/s9.jpg"), asset("images/s10.jpg"), asset("images/s11.jpg"), asset("images/s12.jpg")],
+      W: [asset("images/w1.jpg"), asset("images/w5.jpg"), asset("images/w9.jpg")],
+      E: [asset("images/e4.jpg"), asset("images/e8.jpg"), asset("images/e12.jpg")],
     };
 
     const texLoader = new THREE.TextureLoader();
@@ -449,40 +510,34 @@
       return plane;
     }
 
-    async function buildAllExternalPicturesPerWall(){
-      // room centers for segments
-      const xCenters = [];
+    async function buildAllExternalPicturesPerWall(progress){
+      // segments
+      const xCentersLocal = [];
       for (let c=0; c<GRID_X; c++){
-        xCenters.push((c - (GRID_X-1)/2) * ROOM_SIZE);
+        xCentersLocal.push((c - (GRID_X-1)/2) * ROOM_SIZE);
       }
-      const zCenters = [];
+      const zCentersLocal = [];
       for (let r=0; r<GRID_Z; r++){
-        zCenters.push((((GRID_Z-1)/2) - r) * ROOM_SIZE);
+        zCentersLocal.push((((GRID_Z-1)/2) - r) * ROOM_SIZE);
       }
 
-      // North (4)
-      for (let i=0;i<GRID_X;i++){
-        const tex = await loadTexture(WALL_IMAGES.N[i]);
-        addExternalWallPicture("N", new THREE.Vector3(xCenters[i],0,0), ROOM_SIZE, tex);
-      }
-      // South (4)
-      for (let i=0;i<GRID_X;i++){
-        const tex = await loadTexture(WALL_IMAGES.S[i]);
-        addExternalWallPicture("S", new THREE.Vector3(xCenters[i],0,0), ROOM_SIZE, tex);
-      }
-      // East (3) top/middle/bottom
-      for (let i=0;i<GRID_Z;i++){
-        const tex = await loadTexture(WALL_IMAGES.E[i]);
-        addExternalWallPicture("E", new THREE.Vector3(0,0,zCenters[i]), ROOM_SIZE, tex);
-      }
-      // West (3)
-      for (let i=0;i<GRID_Z;i++){
-        const tex = await loadTexture(WALL_IMAGES.W[i]);
-        addExternalWallPicture("W", new THREE.Vector3(0,0,zCenters[i]), ROOM_SIZE, tex);
+      // Total images: 4 + 4 + 3 + 3 = 14
+      const tasks = [];
+      for (let i=0;i<GRID_X;i++) tasks.push({ wall:"N", idx:i, url:WALL_IMAGES.N[i], pos:new THREE.Vector3(xCentersLocal[i],0,0) });
+      for (let i=0;i<GRID_X;i++) tasks.push({ wall:"S", idx:i, url:WALL_IMAGES.S[i], pos:new THREE.Vector3(xCentersLocal[i],0,0) });
+      for (let i=0;i<GRID_Z;i++) tasks.push({ wall:"E", idx:i, url:WALL_IMAGES.E[i], pos:new THREE.Vector3(0,0,zCentersLocal[i]) });
+      for (let i=0;i<GRID_Z;i++) tasks.push({ wall:"W", idx:i, url:WALL_IMAGES.W[i], pos:new THREE.Vector3(0,0,zCentersLocal[i]) });
+
+      let done = 0;
+      for (const t of tasks){
+        const tex = await loadTexture(t.url);
+        addExternalWallPicture(t.wall, t.pos, ROOM_SIZE, tex);
+        done++;
+        progress?.(done, tasks.length);
       }
     }
 
-    // ---------------- Player rig ----------------
+    // ---------------- Player rig (desktop) ----------------
     const yawObject = new THREE.Object3D();
     // start in top-left room (room 1)
     yawObject.position.set(xCenters[0], PLAYER_Y, zCenters[0]);
@@ -491,20 +546,26 @@
     yawObject.add(pitchObject);
     scene.add(yawObject);
 
+    // Desktop pointer lock look (disabled while in XR)
     let isLocked = false;
     const PI_2 = Math.PI / 2;
 
-    function requestLock(){ document.body.requestPointerLock(); }
+    function requestLock(){
+      if (renderer.xr.isPresenting) return; // no pointer lock in VR
+      document.body.requestPointerLock?.();
+    }
     document.addEventListener("pointerlockchange", () => {
       isLocked = (document.pointerLockElement === document.body);
     });
     document.addEventListener("mousemove", (e) => {
       if (!isLocked) return;
+      if (renderer.xr.isPresenting) return;
       yawObject.rotation.y -= (e.movementX || 0) * 0.0022;
       pitchObject.rotation.x -= (e.movementY || 0) * 0.0022;
       pitchObject.rotation.x = Math.max(-PI_2, Math.min(PI_2, pitchObject.rotation.x));
     });
 
+    // Desktop keys
     const keys = { w:false, a:false, s:false, d:false };
     function onKey(e, down){
       if(e.code==="KeyW") keys.w = down;
@@ -564,11 +625,13 @@
       return impulse;
     }
 
-    async function loadBuffer(ctx, url){
+    async function loadBuffer(ctx, url, progress){
       const res = await fetch(url);
       if(!res.ok) throw new Error(`Audio fetch failed (${res.status}) for: ${url}`);
       const arr = await res.arrayBuffer();
-      return await ctx.decodeAudioData(arr);
+      const buf = await ctx.decodeAudioData(arr);
+      progress?.();
+      return buf;
     }
 
     function createCornerSource(ctx, buffer, worldPos){
@@ -690,11 +753,14 @@
 
       const p = yawObject.position;
 
+      // listener pos
       audioCtx.listener.positionX.value = p.x;
       audioCtx.listener.positionY.value = p.y;
       audioCtx.listener.positionZ.value = p.z;
 
-      const fwd = new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion).normalize();
+      // listener fwd: in VR use headset orientation, on desktop use camera quaternion
+      const q = camera.quaternion;
+      const fwd = new THREE.Vector3(0,0,-1).applyQuaternion(q).normalize();
       audioCtx.listener.forwardX.value = fwd.x;
       audioCtx.listener.forwardY.value = fwd.y;
       audioCtx.listener.forwardZ.value = fwd.z;
@@ -721,23 +787,179 @@
         const cornerW = mix[s.cornerIndex];
 
         const target = s.baseGain * gate * cornerW;
-
         s.currentGain = lerp(s.currentGain, target, follow);
         s.node.gain.gain.value = s.currentGain;
       }
+    }
+
+    // ===================== WebXR "VRButton" (no extra files) =====================
+    function createInlineVRButton(renderer){
+      const button = document.createElement("button");
+      button.style.padding = "10px 14px";
+      button.style.borderRadius = "12px";
+      button.style.border = "none";
+      button.style.fontWeight = "800";
+      button.style.background = "#66d9ff";
+      button.style.color = "#0b0f1b";
+      button.style.cursor = "pointer";
+      button.textContent = "Enter VR";
+      button.disabled = true;
+
+      async function updateState(){
+        if (!navigator.xr){
+          button.disabled = true;
+          button.textContent = "WebXR not available";
+          return;
+        }
+        try{
+          const ok = await navigator.xr.isSessionSupported("immersive-vr");
+          if (!ok){
+            button.disabled = true;
+            button.textContent = "VR not supported";
+            return;
+          }
+          button.disabled = false;
+          button.textContent = "Enter VR";
+        }catch(e){
+          button.disabled = true;
+          button.textContent = "VR check failed";
+        }
+      }
+
+      button.addEventListener("click", async () => {
+        try{
+          // Start immersive VR session
+          const session = await navigator.xr.requestSession("immersive-vr", {
+            optionalFeatures: ["local-floor", "bounded-floor", "hand-tracking"]
+          });
+          renderer.xr.setReferenceSpaceType("local-floor");
+          await renderer.xr.setSession(session);
+          // hide pointer lock if any
+          if (document.pointerLockElement) document.exitPointerLock?.();
+        }catch(err){
+          setStatus("ERROR entering VR:\n" + (err?.message ? err.message : String(err)));
+        }
+      });
+
+      updateState();
+      return button;
+    }
+
+    // ===================== VR locomotion (Quest controllers) =====================
+    const xrControllers = { left: null, right: null, leftGrip: null, rightGrip: null };
+    let xrLeftAxis = { x: 0, y: 0 };
+    let xrRightAxis = { x: 0, y: 0 };
+
+    // Snap turn
+    const SNAP_ANGLE = Math.PI / 6; // 30°
+    const SNAP_DEADZONE = 0.65;
+    let snapCooldown = 0;
+
+    // Deadzone for movement
+    const MOVE_DEADZONE = 0.18;
+
+    function getXRGamepad(controller){
+      const src = controller?.inputSource;
+      return src?.gamepad || null;
+    }
+
+    function updateXRAxes(){
+      xrLeftAxis.x = 0; xrLeftAxis.y = 0;
+      xrRightAxis.x = 0; xrRightAxis.y = 0;
+
+      const gl = getXRGamepad(xrControllers.left);
+      const gr = getXRGamepad(xrControllers.right);
+
+      // Most Quest controllers: axes[0], axes[1] = thumbstick
+      if (gl && gl.axes && gl.axes.length >= 2){
+        xrLeftAxis.x = gl.axes[0] || 0;
+        xrLeftAxis.y = gl.axes[1] || 0;
+      }
+      if (gr && gr.axes && gr.axes.length >= 2){
+        xrRightAxis.x = gr.axes[0] || 0;
+        xrRightAxis.y = gr.axes[1] || 0;
+      }
+    }
+
+    function applyVRLocomotion(dt){
+      if (!renderer.xr.isPresenting) return;
+
+      updateXRAxes();
+
+      // movement vector from left stick
+      const ax = xrLeftAxis.x;
+      const ay = xrLeftAxis.y;
+
+      const mag = Math.sqrt(ax*ax + ay*ay);
+      const use = (mag > MOVE_DEADZONE) ? 1 : 0;
+
+      // Direction based on headset yaw (ignore pitch)
+      const head = renderer.xr.getCamera(camera);
+      const headQuat = head.quaternion;
+
+      const fwd = new THREE.Vector3(0,0,-1).applyQuaternion(headQuat);
+      fwd.y = 0; fwd.normalize();
+      const right = new THREE.Vector3(1,0,0).applyQuaternion(headQuat);
+      right.y = 0; right.normalize();
+
+      // Convert stick to world delta (note: ay is typically +down)
+      const speed = 4.4;
+      const move = new THREE.Vector3();
+
+      if (use){
+        move.addScaledVector(right, ax * speed * dt);
+        move.addScaledVector(fwd,  (-ay) * speed * dt);
+        moveWithCollisions(yawObject.position, move);
+      }
+
+      // snap turn from right stick x
+      snapCooldown = Math.max(0, snapCooldown - dt);
+      const turn = xrRightAxis.x;
+
+      if (snapCooldown <= 0 && Math.abs(turn) > SNAP_DEADZONE){
+        yawObject.rotation.y -= Math.sign(turn) * SNAP_ANGLE;
+        snapCooldown = 0.28;
+      }
+    }
+
+    // Setup XR controllers
+    xrControllers.left = renderer.xr.getController(0);
+    xrControllers.right = renderer.xr.getController(1);
+    xrControllers.leftGrip = renderer.xr.getControllerGrip(0);
+    xrControllers.rightGrip = renderer.xr.getControllerGrip(1);
+    scene.add(xrControllers.left);
+    scene.add(xrControllers.right);
+    scene.add(xrControllers.leftGrip);
+    scene.add(xrControllers.rightGrip);
+
+    // ===================== Loading helpers (progress bar) =====================
+    function setProgressPhase(phase, done, total){
+      const pct = total > 0 ? (done / total) * 100 : 0;
+      showProgress(`${phase} (${done}/${total})`, pct);
     }
 
     // ---------------- Start ----------------
     startBtn.addEventListener("click", async () => {
       try{
         startBtn.disabled = true;
-        setStatus("Starting…\nRequesting pointer lock…");
+        vrHolder.style.display = "none";
+        hideProgress();
+
+        setStatus("Starting…\n(Desktop) requesting pointer lock…");
         requestLock();
 
-        setStatus("Loading per-wall images…");
-        await buildAllExternalPicturesPerWall();
+        // ---- Images (14) ----
+        let imgDone = 0;
+        const IMG_TOTAL = 14;
+        showProgress("Loading images… (0/14)", 0);
+        await buildAllExternalPicturesPerWall((done,total) => {
+          imgDone = done;
+          setProgressPhase("Loading images…", imgDone, total);
+        });
 
+        // ---- Audio context ----
         setStatus("Creating AudioContext…");
+        showProgress("Creating audio engine…", 0);
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         await audioCtx.resume();
 
@@ -753,16 +975,33 @@
         reverbBus.connect(convolver);
         convolver.connect(master);
 
-        setStatus("Loading audio…\nExpecting audio/room1-1.mp3 … audio/room12-4.mp3");
+        // ---- Audio files (48) ----
         const urls = [];
         for (let roomId=1; roomId<=ROOM_COUNT; roomId++){
           for (let corner=1; corner<=4; corner++){
-            urls.push(`audio/room${roomId}-${corner}.mp3`);
+            urls.push(asset(`audio/room${roomId}-${corner}.mp3`));
           }
         }
-        const buffers = await Promise.all(urls.map(u => loadBuffer(audioCtx, u)));
 
+        let audDone = 0;
+        const AUD_TOTAL = urls.length; // 48
+        setStatus("Loading audio…\nExpecting audio/room1-1.mp3 … audio/room12-4.mp3");
+        showProgress("Loading audio… (0/48)", 0);
+
+        // Load sequentially to keep memory/CPU spikes lower on Quest Browser
+        const buffers = [];
+        for (const u of urls){
+          const buf = await loadBuffer(audioCtx, u, () => {
+            audDone++;
+            setProgressPhase("Loading audio…", audDone, AUD_TOTAL);
+          });
+          buffers.push(buf);
+        }
+
+        // ---- Create sources ----
         setStatus("Creating corner sources…");
+        showProgress("Starting sources…", 100);
+
         let k = 0;
         for (let roomIndex=0; roomIndex<ROOM_COUNT; roomIndex++){
           const corners = roomCorners[roomIndex];
@@ -779,16 +1018,27 @@
           }
         }
 
-        setStatus("Running ✅\nPer-wall images + audio active.");
+        hideProgress();
+        setStatus("Running ✅\nPer-wall images + audio active.\n\nVR: use Enter VR when ready.");
+        vrHolder.style.display = "flex";
+
+        // Create and attach VR button (enable it now)
+        vrHolder.innerHTML = `<span class="vrNote">
+          After loading completes, tap <b>Enter VR</b> (Quest Browser). If VR is unsupported, it will show a message.
+        </span>`;
+        const vrBtn = createInlineVRButton(renderer);
+        vrHolder.prepend(vrBtn);
+
         fadeOverlayOut();
 
       }catch(err){
+        hideProgress();
         setStatus(
           "ERROR\n\n" + (err?.message ? err.message : String(err)) +
           "\n\nFixes:\n" +
-          "- Ensure your images exist at the paths in WALL_IMAGES\n" +
-          "- Ensure audio/room1-1.mp3 … audio/room12-4.mp3 exist (48 files)\n" +
-          "- Open DevTools → Network for 404s\n"
+          "- Ensure your images exist at /ambient26/images/... (and match case)\n" +
+          "- Ensure audio exists at /ambient26/audio/room1-1.mp3 … room12-4.mp3\n" +
+          "- Open DevTools → Network for 404s (copy the failing URL)\n"
         );
         startBtn.disabled = false;
       }
@@ -804,25 +1054,32 @@
 
     function tick(){
       const dt = Math.min(0.05, clock.getDelta());
-      const speed = 4.9;
 
-      moveDirVec.set(0,0,0);
-      if(keys.w) moveDirVec.z -= 1;
-      if(keys.s) moveDirVec.z += 1;
-      if(keys.a) moveDirVec.x -= 1;
-      if(keys.d) moveDirVec.x += 1;
-      if (moveDirVec.lengthSq() > 0) moveDirVec.normalize();
+      // Desktop movement (only when not in XR)
+      if (!renderer.xr.isPresenting){
+        const speed = 4.9;
 
-      forwardTmp.set(0,0,-1).applyQuaternion(yawObject.quaternion);
-      forwardTmp.y = 0;
-      forwardTmp.normalize();
-      rightVec.copy(forwardTmp).cross(upVec).normalize();
+        moveDirVec.set(0,0,0);
+        if(keys.w) moveDirVec.z -= 1;
+        if(keys.s) moveDirVec.z += 1;
+        if(keys.a) moveDirVec.x -= 1;
+        if(keys.d) moveDirVec.x += 1;
+        if (moveDirVec.lengthSq() > 0) moveDirVec.normalize();
 
-      vel.set(0,0,0);
-      vel.addScaledVector(forwardTmp, moveDirVec.z * speed * dt);
-      vel.addScaledVector(rightVec,  moveDirVec.x * speed * dt);
+        forwardTmp.set(0,0,-1).applyQuaternion(yawObject.quaternion);
+        forwardTmp.y = 0;
+        forwardTmp.normalize();
+        rightVec.copy(forwardTmp).cross(upVec).normalize();
 
-      moveWithCollisions(yawObject.position, vel);
+        vel.set(0,0,0);
+        vel.addScaledVector(forwardTmp, moveDirVec.z * speed * dt);
+        vel.addScaledVector(rightVec,  moveDirVec.x * speed * dt);
+
+        moveWithCollisions(yawObject.position, vel);
+      } else {
+        // VR locomotion
+        applyVRLocomotion(dt);
+      }
 
       if (audioCtx) applyAudio(dt);
 
