@@ -22,7 +22,12 @@
     }
     button:disabled{opacity:.6;cursor:not-allowed}
     .hint{opacity:.85;line-height:1.4}
-    #hud{position:fixed;left:12px;bottom:12px;opacity:.85;font-size:13px;z-index: 5}
+    #hud{
+      position:fixed;left:12px;bottom:12px;opacity:.85;font-size:13px;z-index: 5;
+      background:rgba(0,0,0,.22);border:1px solid rgba(255,255,255,.14);
+      padding:8px 10px;border-radius:12px;white-space:pre;
+      max-width:min(520px,92vw);
+    }
     #status{
       margin-top:12px;
       padding:10px 12px;
@@ -34,8 +39,6 @@
       white-space:pre-wrap;
       display:none;
     }
-
-    /* Progress bar */
     .barWrap{
       margin-top:12px;
       border-radius:999px;
@@ -57,23 +60,7 @@
       opacity:.85;
       display:none;
     }
-
     canvas{display:block}
-    code{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;}
-
-    /* VR button positioning (Three VRButton creates a DOM button) */
-    .vrBtnHolder{
-      margin-top:12px;
-      display:flex;
-      gap:10px;
-      align-items:center;
-      flex-wrap:wrap;
-    }
-    .vrNote{
-      font-size:12px;
-      opacity:.85;
-      line-height:1.35;
-    }
   </style>
 </head>
 <body>
@@ -83,12 +70,11 @@
 
       <p class="hint" style="margin:0 0 10px 0;">
         Audio: <b>audio/room1-1.mp3 … audio/room12-4.mp3</b> (48 files).<br/>
-        Images: <b>per-wall mapping</b> for external wall segments.
+        Quest VR: <b>Left stick</b> move, <b>Right stick</b> snap turn.
       </p>
 
       <p class="hint" style="margin:0 0 12px 0;">
-        Desktop: <b>WASD</b> move, <b>mouse</b> look (pointer lock), <b>ESC</b> release.<br/>
-        Quest / VR: <b>Left stick</b> move, <b>Right stick</b> snap turn.
+        Desktop: <b>WASD</b> move, <b>mouse</b> look (pointer lock), <b>ESC</b> release.
       </p>
 
       <button id="startBtn">Start (load audio + images)</button>
@@ -96,22 +82,11 @@
       <div class="barWrap" id="barWrap"><div class="barFill" id="barFill"></div></div>
       <div class="barLabel" id="barLabel">Loading…</div>
 
-      <div class="vrBtnHolder" id="vrHolder" style="display:none;">
-        <!-- VRButton will be injected here -->
-        <span class="vrNote">
-          After loading completes, tap <b>Enter VR</b> (Quest Browser). If VR is unsupported, it will show a message.
-        </span>
-      </div>
-
-      <p class="hint" style="margin:12px 0 0 0;">
-        Debug: <b>green dots</b> doorway centres, <b>pink dots</b> audio corner positions.
-      </p>
-
       <div id="status"></div>
     </div>
   </div>
 
-  <div id="hud">WASD • Mouse look (pointer lock) • ESC to release</div>
+  <div id="hud">Desktop: WASD + mouse\nVR: Left stick move, Right stick snap turn</div>
 
   <script src="./vendor/three.min.js"></script>
 
@@ -122,7 +97,7 @@
     const barWrap = document.getElementById("barWrap");
     const barFill = document.getElementById("barFill");
     const barLabel = document.getElementById("barLabel");
-    const vrHolder = document.getElementById("vrHolder");
+    const hud = document.getElementById("hud");
 
     function setStatus(msg){
       statusBox.style.display = "block";
@@ -174,15 +149,15 @@
     renderer.xr.enabled = true; // ✅ WebXR
     document.body.appendChild(renderer.domElement);
 
-    // brighter lighting
+    // Lighting
     scene.add(new THREE.HemisphereLight(0xf7fbff, 0x0b0f1b, 2.2));
     const sun = new THREE.DirectionalLight(0xffffff, 1.55);
     sun.position.set(22, 36, 18);
     scene.add(sun);
 
     // ---------------- Layout ----------------
-    const GRID_X = 4; // columns
-    const GRID_Z = 3; // rows
+    const GRID_X = 4;
+    const GRID_Z = 3;
     const ROOM_COUNT = GRID_X * GRID_Z;
 
     const ROOM_HALF = 18;
@@ -200,9 +175,8 @@
 
     const PLAYER_Y = 1.7;
 
-    // World extents
-    const WORLD_HALF_X = ROOM_HALF * GRID_X; // 72
-    const WORLD_HALF_Z = ROOM_HALF * GRID_Z; // 54
+    const WORLD_HALF_X = ROOM_HALF * GRID_X;
+    const WORLD_HALF_Z = ROOM_HALF * GRID_Z;
 
     // collision
     const PLAYER_R = 0.55;
@@ -223,7 +197,7 @@
       return (dx*dx + dz*dz) < (PLAYER_R*PLAYER_R);
     }
 
-    // ---------------- Color per room (bright floors) ----------------
+    // Colors
     function hsvToRgb(h, s, v){
       let r=0,g=0,b=0;
       const i = Math.floor(h*6);
@@ -245,7 +219,6 @@
       const {r,g,b} = hsvToRgb(h,s,v);
       return (r<<16) | (g<<8) | b;
     }
-
     function brightWall(hex){
       return new THREE.MeshStandardMaterial({
         color: hex,
@@ -256,7 +229,7 @@
       });
     }
 
-    // Room centres (row-major)
+    // Room centres + floor materials
     const roomCenters = [];
     const roomFloorMats = [];
     for (let r=0; r<GRID_Z; r++){
@@ -292,7 +265,7 @@
       scene.add(ceil);
     }
 
-    // ---------------- Walls ----------------
+    // Walls
     const yMid = WALL_H/2;
     const PART_LEN = ROOM_SIZE + WALL_T*2;
 
@@ -370,28 +343,26 @@
       return m;
     }
 
-    // Build floors/ceilings
+    // Floors/ceilings
     for (let i=0; i<roomCenters.length; i++){
       addFloorCeil(roomCenters[i], roomFloorMats[i]);
     }
 
-    // Outer boundary (solid)
+    // Outer boundary
     const outerMat = brightWall(0x4e78ff);
     addWallAlongX(0,  WORLD_HALF_Z + WALL_T/2, WORLD_HALF_X*2 + WALL_T*2, WALL_T, outerMat, false);
     addWallAlongX(0, -WORLD_HALF_Z - WALL_T/2, WORLD_HALF_X*2 + WALL_T*2, WALL_T, outerMat, false);
     addWallAlongZ( WORLD_HALF_X + WALL_T/2, 0, WORLD_HALF_Z*2 + WALL_T*2, WALL_T, outerMat, false);
     addWallAlongZ(-WORLD_HALF_X - WALL_T/2, 0, WORLD_HALF_Z*2 + WALL_T*2, WALL_T, outerMat, false);
 
-    // Interior partitions with centred doors
+    // Interior partitions
     const vMat = brightWall(0x2f45a8);
     const vWallsX = [];
-    for (let i=1; i<GRID_X; i++){
-      vWallsX.push(-WORLD_HALF_X + i*ROOM_SIZE);
-    }
+    for (let i=1; i<GRID_X; i++) vWallsX.push(-WORLD_HALF_X + i*ROOM_SIZE);
+
     const zCenters = [];
-    for (let r=0; r<GRID_Z; r++){
-      zCenters.push((((GRID_Z-1)/2) - r) * ROOM_SIZE);
-    }
+    for (let r=0; r<GRID_Z; r++) zCenters.push((((GRID_Z-1)/2) - r) * ROOM_SIZE);
+
     for (const x of vWallsX){
       for (const zCenter of zCenters){
         addWallAlongZ(x, zCenter, PART_LEN, WALL_T, vMat, true);
@@ -401,13 +372,11 @@
 
     const hMat = brightWall(0x3e2fa8);
     const hWallsZ = [];
-    for (let r=1; r<GRID_Z; r++){
-      hWallsZ.push(WORLD_HALF_Z - r*ROOM_SIZE);
-    }
+    for (let r=1; r<GRID_Z; r++) hWallsZ.push(WORLD_HALF_Z - r*ROOM_SIZE);
+
     const xCenters = [];
-    for (let c=0; c<GRID_X; c++){
-      xCenters.push((c - (GRID_X-1)/2) * ROOM_SIZE);
-    }
+    for (let c=0; c<GRID_X; c++) xCenters.push((c - (GRID_X-1)/2) * ROOM_SIZE);
+
     for (const z of hWallsZ){
       for (const xCenter of xCenters){
         addWallAlongX(xCenter, z, PART_LEN, WALL_T, hMat, true);
@@ -415,7 +384,6 @@
       }
     }
 
-    // Posts at interior intersections
     const postMat = brightWall(0x6aa9ff);
     for (const x of vWallsX){
       for (const z of hWallsZ){
@@ -423,7 +391,7 @@
       }
     }
 
-    // ---------------- Corner (audio) positions ----------------
+    // Corner positions
     const CORNER_INSET = 1.6;
     function roomCornerPositions(center){
       const xW = center.x - (ROOM_HALF - CORNER_INSET);
@@ -432,10 +400,10 @@
       const zS = center.z - (ROOM_HALF - CORNER_INSET);
       const y  = PLAYER_Y;
       return [
-        new THREE.Vector3(xW, y, zN), // 0 NW
-        new THREE.Vector3(xE, y, zN), // 1 NE
-        new THREE.Vector3(xW, y, zS), // 2 SW
-        new THREE.Vector3(xE, y, zS), // 3 SE
+        new THREE.Vector3(xW, y, zN),
+        new THREE.Vector3(xE, y, zN),
+        new THREE.Vector3(xW, y, zS),
+        new THREE.Vector3(xE, y, zS),
       ];
     }
 
@@ -446,7 +414,7 @@
       corners.forEach(p => addMarker(new THREE.Vector3(p.x, 1.2, p.z), 0xff6bd6, 0.18));
     }
 
-    // ===================== PER-WALL EXTERNAL IMAGES (4×3) =====================
+    // Images
     const WALL_IMAGES = {
       N: [asset("images/n1.jpg"), asset("images/n2.jpg"), asset("images/n3.jpg"), asset("images/n4.jpg")],
       S: [asset("images/s9.jpg"), asset("images/s10.jpg"), asset("images/s11.jpg"), asset("images/s12.jpg")],
@@ -455,7 +423,7 @@
     };
 
     const texLoader = new THREE.TextureLoader();
-    const textureCache = new Map(); // url -> THREE.Texture
+    const textureCache = new Map();
 
     function loadTexture(url){
       if (textureCache.has(url)) return Promise.resolve(textureCache.get(url));
@@ -472,7 +440,7 @@
     function makePictureMaterial(tex){
       tex.wrapS = THREE.ClampToEdgeWrapping;
       tex.wrapT = THREE.ClampToEdgeWrapping;
-      tex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+      tex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy()); // a bit cheaper for Quest
       tex.needsUpdate = true;
       return new THREE.MeshStandardMaterial({
         map: tex,
@@ -484,7 +452,7 @@
     }
 
     function addExternalWallPicture(whichWall, segmentCenter, segmentLength, tex){
-      const wallInnerOffset = 0.06; // avoid z-fighting
+      const wallInnerOffset = 0.06;
       const pictureW = segmentLength * 0.50;
       const pictureH = pictureW * 0.62;
       const y = 6.2;
@@ -497,7 +465,6 @@
         plane.rotation.y = Math.PI;
       } else if (whichWall === "S"){
         plane.position.set(segmentCenter.x, y, -WORLD_HALF_Z + wallInnerOffset);
-        plane.rotation.y = 0;
       } else if (whichWall === "E"){
         plane.position.set(WORLD_HALF_X - wallInnerOffset, y, segmentCenter.z);
         plane.rotation.y = -Math.PI/2;
@@ -507,26 +474,19 @@
       }
 
       scene.add(plane);
-      return plane;
     }
 
     async function buildAllExternalPicturesPerWall(progress){
-      // segments
       const xCentersLocal = [];
-      for (let c=0; c<GRID_X; c++){
-        xCentersLocal.push((c - (GRID_X-1)/2) * ROOM_SIZE);
-      }
+      for (let c=0; c<GRID_X; c++) xCentersLocal.push((c - (GRID_X-1)/2) * ROOM_SIZE);
       const zCentersLocal = [];
-      for (let r=0; r<GRID_Z; r++){
-        zCentersLocal.push((((GRID_Z-1)/2) - r) * ROOM_SIZE);
-      }
+      for (let r=0; r<GRID_Z; r++) zCentersLocal.push((((GRID_Z-1)/2) - r) * ROOM_SIZE);
 
-      // Total images: 4 + 4 + 3 + 3 = 14
       const tasks = [];
-      for (let i=0;i<GRID_X;i++) tasks.push({ wall:"N", idx:i, url:WALL_IMAGES.N[i], pos:new THREE.Vector3(xCentersLocal[i],0,0) });
-      for (let i=0;i<GRID_X;i++) tasks.push({ wall:"S", idx:i, url:WALL_IMAGES.S[i], pos:new THREE.Vector3(xCentersLocal[i],0,0) });
-      for (let i=0;i<GRID_Z;i++) tasks.push({ wall:"E", idx:i, url:WALL_IMAGES.E[i], pos:new THREE.Vector3(0,0,zCentersLocal[i]) });
-      for (let i=0;i<GRID_Z;i++) tasks.push({ wall:"W", idx:i, url:WALL_IMAGES.W[i], pos:new THREE.Vector3(0,0,zCentersLocal[i]) });
+      for (let i=0;i<GRID_X;i++) tasks.push({ wall:"N", url:WALL_IMAGES.N[i], pos:new THREE.Vector3(xCentersLocal[i],0,0) });
+      for (let i=0;i<GRID_X;i++) tasks.push({ wall:"S", url:WALL_IMAGES.S[i], pos:new THREE.Vector3(xCentersLocal[i],0,0) });
+      for (let i=0;i<GRID_Z;i++) tasks.push({ wall:"E", url:WALL_IMAGES.E[i], pos:new THREE.Vector3(0,0,zCentersLocal[i]) });
+      for (let i=0;i<GRID_Z;i++) tasks.push({ wall:"W", url:WALL_IMAGES.W[i], pos:new THREE.Vector3(0,0,zCentersLocal[i]) });
 
       let done = 0;
       for (const t of tasks){
@@ -537,21 +497,20 @@
       }
     }
 
-    // ---------------- Player rig (desktop) ----------------
+    // ---------------- Player rig ----------------
     const yawObject = new THREE.Object3D();
-    // start in top-left room (room 1)
     yawObject.position.set(xCenters[0], PLAYER_Y, zCenters[0]);
     const pitchObject = new THREE.Object3D();
     pitchObject.add(camera);
     yawObject.add(pitchObject);
     scene.add(yawObject);
 
-    // Desktop pointer lock look (disabled while in XR)
+    // Desktop pointer lock
     let isLocked = false;
     const PI_2 = Math.PI / 2;
 
     function requestLock(){
-      if (renderer.xr.isPresenting) return; // no pointer lock in VR
+      if (renderer.xr.isPresenting) return;
       document.body.requestPointerLock?.();
     }
     document.addEventListener("pointerlockchange", () => {
@@ -608,22 +567,9 @@
       pos.copy(next);
     }
 
-    // ===================== AUDIO =====================
-    let audioCtx, master, reverbBus;
+    // ===================== AUDIO (Quest-friendly tweaks) =====================
+    let audioCtx, master;
     const sources = []; // { roomIndex, cornerIndex, node, baseGain, currentGain }
-
-    async function makeTinyImpulse(ctx, seconds=1.2){
-      const rate = ctx.sampleRate;
-      const length = Math.floor(rate * seconds);
-      const impulse = ctx.createBuffer(2, length, rate);
-      for(let ch=0; ch<2; ch++){
-        const data = impulse.getChannelData(ch);
-        for(let i=0;i<length;i++){
-          data[i] = (Math.random()*2-1) * Math.pow(1 - i/length, 3);
-        }
-      }
-      return impulse;
-    }
 
     async function loadBuffer(ctx, url, progress){
       const res = await fetch(url);
@@ -642,29 +588,24 @@
       const gain = ctx.createGain();
       gain.gain.value = 0.0;
 
+      // cheaper panner than HRTF on mobile
       const panner = ctx.createPanner();
-      panner.panningModel = "HRTF";
+      panner.panningModel = "equalpower";
       panner.distanceModel = "inverse";
-      panner.refDistance = 1.0;
-      panner.maxDistance = 140;
-      panner.rolloffFactor = 0.1;
+      panner.refDistance = 1.2;
+      panner.maxDistance = 90;
+      panner.rolloffFactor = 0.18;
 
       panner.positionX.value = worldPos.x;
       panner.positionY.value = worldPos.y;
       panner.positionZ.value = worldPos.z;
 
-      const send = ctx.createGain();
-      send.gain.value = 0.04;
-
       src.connect(gain);
       gain.connect(panner);
       panner.connect(master);
 
-      gain.connect(send);
-      send.connect(reverbBus);
-
       src.start();
-      return { src, gain, panner, send };
+      return { src, gain, panner };
     }
 
     const MIN_CORNER_REL = 0.10;
@@ -713,7 +654,6 @@
       const col = roomIdx % GRID_X;
       const row = Math.floor(roomIdx / GRID_X);
 
-      // right
       if (col < GRID_X-1){
         const dist = ROOM_HALF - lx;
         if (Math.abs(dist) <= DOOR_BLEND && Math.abs(lz) <= (DOOR_W/2 + DOOR_BLEND)){
@@ -721,7 +661,6 @@
           w[roomIdx + 1] = Math.max(w[roomIdx + 1], t * 0.75);
         }
       }
-      // left
       if (col > 0){
         const dist = ROOM_HALF + lx;
         if (Math.abs(dist) <= DOOR_BLEND && Math.abs(lz) <= (DOOR_W/2 + DOOR_BLEND)){
@@ -729,7 +668,6 @@
           w[roomIdx - 1] = Math.max(w[roomIdx - 1], t * 0.75);
         }
       }
-      // down (south)
       if (row < GRID_Z-1){
         const dist = ROOM_HALF + lz;
         if (Math.abs(dist) <= DOOR_BLEND && Math.abs(lx) <= (DOOR_W/2 + DOOR_BLEND)){
@@ -737,7 +675,6 @@
           w[roomIdx + GRID_X] = Math.max(w[roomIdx + GRID_X], t * 0.75);
         }
       }
-      // up (north)
       if (row > 0){
         const dist = ROOM_HALF - lz;
         if (Math.abs(dist) <= DOOR_BLEND && Math.abs(lx) <= (DOOR_W/2 + DOOR_BLEND)){
@@ -752,26 +689,21 @@
       if (!audioCtx) return;
 
       const p = yawObject.position;
-
-      // listener pos
       audioCtx.listener.positionX.value = p.x;
       audioCtx.listener.positionY.value = p.y;
       audioCtx.listener.positionZ.value = p.z;
 
-      // listener fwd: in VR use headset orientation, on desktop use camera quaternion
-      const q = camera.quaternion;
-      const fwd = new THREE.Vector3(0,0,-1).applyQuaternion(q).normalize();
+      // orientation (camera works in both desktop + XR in three)
+      const fwd = new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion).normalize();
       audioCtx.listener.forwardX.value = fwd.x;
       audioCtx.listener.forwardY.value = fwd.y;
       audioCtx.listener.forwardZ.value = fwd.z;
-
       audioCtx.listener.upX.value = 0;
       audioCtx.listener.upY.value = 1;
       audioCtx.listener.upZ.value = 0;
 
       const roomIdx = currentRoomIndex(p);
       const roomW = doorwayRoomWeights(p, roomIdx);
-
       const follow = clamp(dt * 10.0, 0, 1);
 
       for (const s of sources){
@@ -792,147 +724,120 @@
       }
     }
 
-    // ===================== WebXR "VRButton" (no extra files) =====================
-    function createInlineVRButton(renderer){
-      const button = document.createElement("button");
-      button.style.padding = "10px 14px";
-      button.style.borderRadius = "12px";
-      button.style.border = "none";
-      button.style.fontWeight = "800";
-      button.style.background = "#66d9ff";
-      button.style.color = "#0b0f1b";
-      button.style.cursor = "pointer";
-      button.textContent = "Enter VR";
-      button.disabled = true;
+    // ===================== WebXR Enter VR button =====================
+    const vrBtn = document.createElement("button");
+    vrBtn.textContent = "Enter VR";
+    vrBtn.disabled = true;
+    vrBtn.style.position = "fixed";
+    vrBtn.style.right = "12px";
+    vrBtn.style.bottom = "12px";
+    vrBtn.style.zIndex = "6";
+    vrBtn.style.borderRadius = "14px";
+    vrBtn.style.padding = "10px 14px";
+    vrBtn.style.fontWeight = "800";
+    vrBtn.style.display = "none";
+    document.body.appendChild(vrBtn);
 
-      async function updateState(){
-        if (!navigator.xr){
-          button.disabled = true;
-          button.textContent = "WebXR not available";
-          return;
-        }
-        try{
-          const ok = await navigator.xr.isSessionSupported("immersive-vr");
-          if (!ok){
-            button.disabled = true;
-            button.textContent = "VR not supported";
-            return;
-          }
-          button.disabled = false;
-          button.textContent = "Enter VR";
-        }catch(e){
-          button.disabled = true;
-          button.textContent = "VR check failed";
-        }
+    async function refreshVRButton(){
+      if (!navigator.xr){
+        vrBtn.disabled = true;
+        vrBtn.textContent = "WebXR not available";
+        return;
       }
-
-      button.addEventListener("click", async () => {
-        try{
-          // Start immersive VR session
-          const session = await navigator.xr.requestSession("immersive-vr", {
-            optionalFeatures: ["local-floor", "bounded-floor", "hand-tracking"]
-          });
-          renderer.xr.setReferenceSpaceType("local-floor");
-          await renderer.xr.setSession(session);
-          // hide pointer lock if any
-          if (document.pointerLockElement) document.exitPointerLock?.();
-        }catch(err){
-          setStatus("ERROR entering VR:\n" + (err?.message ? err.message : String(err)));
-        }
-      });
-
-      updateState();
-      return button;
+      try{
+        const ok = await navigator.xr.isSessionSupported("immersive-vr");
+        vrBtn.disabled = !ok;
+        vrBtn.textContent = ok ? "Enter VR" : "VR not supported";
+      }catch(e){
+        vrBtn.disabled = true;
+        vrBtn.textContent = "VR check failed";
+      }
     }
 
-    // ===================== VR locomotion (Quest controllers) =====================
-    const xrControllers = { left: null, right: null, leftGrip: null, rightGrip: null };
-    let xrLeftAxis = { x: 0, y: 0 };
-    let xrRightAxis = { x: 0, y: 0 };
+    vrBtn.addEventListener("click", async () => {
+      try{
+        const session = await navigator.xr.requestSession("immersive-vr", {
+          optionalFeatures: ["local-floor", "bounded-floor"]
+        });
+        renderer.xr.setReferenceSpaceType("local-floor");
+        await renderer.xr.setSession(session);
+        if (document.pointerLockElement) document.exitPointerLock?.();
+      }catch(err){
+        setStatus("ERROR entering VR:\n" + (err?.message ? err.message : String(err)));
+      }
+    });
 
-    // Snap turn
-    const SNAP_ANGLE = Math.PI / 6; // 30°
+    // ===================== VR locomotion (robust inputSources) =====================
+    const MOVE_DEADZONE = 0.18;
     const SNAP_DEADZONE = 0.65;
+    const SNAP_ANGLE = Math.PI / 6; // 30°
     let snapCooldown = 0;
 
-    // Deadzone for movement
-    const MOVE_DEADZONE = 0.18;
-
-    function getXRGamepad(controller){
-      const src = controller?.inputSource;
-      return src?.gamepad || null;
-    }
-
-    function updateXRAxes(){
-      xrLeftAxis.x = 0; xrLeftAxis.y = 0;
-      xrRightAxis.x = 0; xrRightAxis.y = 0;
-
-      const gl = getXRGamepad(xrControllers.left);
-      const gr = getXRGamepad(xrControllers.right);
-
-      // Most Quest controllers: axes[0], axes[1] = thumbstick
-      if (gl && gl.axes && gl.axes.length >= 2){
-        xrLeftAxis.x = gl.axes[0] || 0;
-        xrLeftAxis.y = gl.axes[1] || 0;
+    function getAxesForHand(handedness){
+      const session = renderer.xr.getSession?.();
+      if (!session) return null;
+      for (const src of session.inputSources){
+        if (!src || !src.gamepad) continue;
+        if (src.handedness !== handedness) continue;
+        const axes = src.gamepad.axes || [];
+        // Most common: [0,1]=stick. Some runtimes use [2,3].
+        if (axes.length >= 2){
+          const a0 = axes[0], a1 = axes[1];
+          const a2 = axes[2], a3 = axes[3];
+          // choose the pair with larger magnitude (helps if layout differs)
+          const m01 = (a0*a0 + a1*a1);
+          const m23 = (a2!==undefined && a3!==undefined) ? (a2*a2 + a3*a3) : -1;
+          if (m23 > m01) return { x: a2 || 0, y: a3 || 0, raw: axes };
+          return { x: a0 || 0, y: a1 || 0, raw: axes };
+        }
       }
-      if (gr && gr.axes && gr.axes.length >= 2){
-        xrRightAxis.x = gr.axes[0] || 0;
-        xrRightAxis.y = gr.axes[1] || 0;
-      }
+      return null;
     }
 
     function applyVRLocomotion(dt){
       if (!renderer.xr.isPresenting) return;
 
-      updateXRAxes();
+      const left = getAxesForHand("left");
+      const right = getAxesForHand("right");
 
-      // movement vector from left stick
-      const ax = xrLeftAxis.x;
-      const ay = xrLeftAxis.y;
+      const lx = left ? left.x : 0;
+      const ly = left ? left.y : 0;
+      const rx = right ? right.x : 0;
 
-      const mag = Math.sqrt(ax*ax + ay*ay);
-      const use = (mag > MOVE_DEADZONE) ? 1 : 0;
-
-      // Direction based on headset yaw (ignore pitch)
-      const head = renderer.xr.getCamera(camera);
-      const headQuat = head.quaternion;
+      // headset yaw basis
+      const xrCam = renderer.xr.getCamera(camera);
+      const headQuat = xrCam.quaternion;
 
       const fwd = new THREE.Vector3(0,0,-1).applyQuaternion(headQuat);
       fwd.y = 0; fwd.normalize();
-      const right = new THREE.Vector3(1,0,0).applyQuaternion(headQuat);
-      right.y = 0; right.normalize();
+      const rgt = new THREE.Vector3(1,0,0).applyQuaternion(headQuat);
+      rgt.y = 0; rgt.normalize();
 
-      // Convert stick to world delta (note: ay is typically +down)
-      const speed = 4.4;
-      const move = new THREE.Vector3();
-
-      if (use){
-        move.addScaledVector(right, ax * speed * dt);
-        move.addScaledVector(fwd,  (-ay) * speed * dt);
+      const mag = Math.sqrt(lx*lx + ly*ly);
+      if (mag > MOVE_DEADZONE){
+        const speed = 4.2;
+        const move = new THREE.Vector3();
+        move.addScaledVector(rgt, lx * speed * dt);
+        move.addScaledVector(fwd, (-ly) * speed * dt);
         moveWithCollisions(yawObject.position, move);
       }
 
-      // snap turn from right stick x
       snapCooldown = Math.max(0, snapCooldown - dt);
-      const turn = xrRightAxis.x;
-
-      if (snapCooldown <= 0 && Math.abs(turn) > SNAP_DEADZONE){
-        yawObject.rotation.y -= Math.sign(turn) * SNAP_ANGLE;
+      if (snapCooldown <= 0 && Math.abs(rx) > SNAP_DEADZONE){
+        yawObject.rotation.y -= Math.sign(rx) * SNAP_ANGLE;
         snapCooldown = 0.28;
       }
+
+      // small HUD debug so you can see if sticks are being read
+      const leftTxt = left ? `L(${lx.toFixed(2)}, ${ly.toFixed(2)})` : "L(none)";
+      const rightTxt = right ? `R(${rx.toFixed(2)})` : "R(none)";
+      hud.textContent =
+        (renderer.xr.isPresenting ? "VR mode\n" : "Desktop mode\n") +
+        "Desktop: WASD + mouse\nVR: Left stick move, Right stick snap turn\n" +
+        leftTxt + "  " + rightTxt;
     }
 
-    // Setup XR controllers
-    xrControllers.left = renderer.xr.getController(0);
-    xrControllers.right = renderer.xr.getController(1);
-    xrControllers.leftGrip = renderer.xr.getControllerGrip(0);
-    xrControllers.rightGrip = renderer.xr.getControllerGrip(1);
-    scene.add(xrControllers.left);
-    scene.add(xrControllers.right);
-    scene.add(xrControllers.leftGrip);
-    scene.add(xrControllers.rightGrip);
-
-    // ===================== Loading helpers (progress bar) =====================
+    // ===================== Loading progress helper =====================
     function setProgressPhase(phase, done, total){
       const pct = total > 0 ? (done / total) * 100 : 0;
       showProgress(`${phase} (${done}/${total})`, pct);
@@ -942,40 +847,30 @@
     startBtn.addEventListener("click", async () => {
       try{
         startBtn.disabled = true;
-        vrHolder.style.display = "none";
         hideProgress();
+        vrBtn.style.display = "none";
 
         setStatus("Starting…\n(Desktop) requesting pointer lock…");
         requestLock();
 
-        // ---- Images (14) ----
-        let imgDone = 0;
-        const IMG_TOTAL = 14;
+        // Images (14)
         showProgress("Loading images… (0/14)", 0);
         await buildAllExternalPicturesPerWall((done,total) => {
-          imgDone = done;
-          setProgressPhase("Loading images…", imgDone, total);
+          setProgressPhase("Loading images…", done, total);
         });
 
-        // ---- Audio context ----
+        // Audio context (Quest-friendly latency hint)
         setStatus("Creating AudioContext…");
         showProgress("Creating audio engine…", 0);
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: "playback" });
         await audioCtx.resume();
 
         master = audioCtx.createGain();
         master.gain.value = 0.75;
         master.connect(audioCtx.destination);
 
-        const convolver = audioCtx.createConvolver();
-        convolver.buffer = await makeTinyImpulse(audioCtx, 1.2);
-
-        reverbBus = audioCtx.createGain();
-        reverbBus.gain.value = 0.35;
-        reverbBus.connect(convolver);
-        convolver.connect(master);
-
-        // ---- Audio files (48) ----
+        // Audio files (48) sequential
         const urls = [];
         for (let roomId=1; roomId<=ROOM_COUNT; roomId++){
           for (let corner=1; corner<=4; corner++){
@@ -984,11 +879,10 @@
         }
 
         let audDone = 0;
-        const AUD_TOTAL = urls.length; // 48
+        const AUD_TOTAL = urls.length;
         setStatus("Loading audio…\nExpecting audio/room1-1.mp3 … audio/room12-4.mp3");
         showProgress("Loading audio… (0/48)", 0);
 
-        // Load sequentially to keep memory/CPU spikes lower on Quest Browser
         const buffers = [];
         for (const u of urls){
           const buf = await loadBuffer(audioCtx, u, () => {
@@ -998,7 +892,7 @@
           buffers.push(buf);
         }
 
-        // ---- Create sources ----
+        // Create sources
         setStatus("Creating corner sources…");
         showProgress("Starting sources…", 100);
 
@@ -1019,17 +913,12 @@
         }
 
         hideProgress();
-        setStatus("Running ✅\nPer-wall images + audio active.\n\nVR: use Enter VR when ready.");
-        vrHolder.style.display = "flex";
-
-        // Create and attach VR button (enable it now)
-        vrHolder.innerHTML = `<span class="vrNote">
-          After loading completes, tap <b>Enter VR</b> (Quest Browser). If VR is unsupported, it will show a message.
-        </span>`;
-        const vrBtn = createInlineVRButton(renderer);
-        vrHolder.prepend(vrBtn);
-
+        setStatus("Running ✅\nPer-wall images + audio active.\n\nTap 'Enter VR' (Quest Browser) when ready.");
         fadeOverlayOut();
+
+        // Enable VR button now that we’re ready
+        vrBtn.style.display = "block";
+        await refreshVRButton();
 
       }catch(err){
         hideProgress();
@@ -1044,7 +933,7 @@
       }
     });
 
-    // ---------------- Animate loop ----------------
+    // ---------------- Animate loop (WebXR-safe) ----------------
     const clock = new THREE.Clock();
     const vel = new THREE.Vector3();
     const moveDirVec = new THREE.Vector3();
@@ -1052,11 +941,11 @@
     const forwardTmp = new THREE.Vector3();
     const upVec = new THREE.Vector3(0,1,0);
 
-    function tick(){
+    function frame(){
       const dt = Math.min(0.05, clock.getDelta());
 
-      // Desktop movement (only when not in XR)
       if (!renderer.xr.isPresenting){
+        // desktop
         const speed = 4.9;
 
         moveDirVec.set(0,0,0);
@@ -1076,17 +965,20 @@
         vel.addScaledVector(rightVec,  moveDirVec.x * speed * dt);
 
         moveWithCollisions(yawObject.position, vel);
+
+        hud.textContent = "Desktop mode\nDesktop: WASD + mouse\nVR: Left stick move, Right stick snap turn";
       } else {
-        // VR locomotion
+        // VR
         applyVRLocomotion(dt);
       }
 
       if (audioCtx) applyAudio(dt);
 
       renderer.render(scene, camera);
-      requestAnimationFrame(tick);
     }
-    tick();
+
+    // ✅ Critical: WebXR-friendly loop
+    renderer.setAnimationLoop(frame);
 
     addEventListener("resize", () => {
       camera.aspect = innerWidth/innerHeight;
