@@ -440,7 +440,7 @@
     function makePictureMaterial(tex){
       tex.wrapS = THREE.ClampToEdgeWrapping;
       tex.wrapT = THREE.ClampToEdgeWrapping;
-      tex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy()); // a bit cheaper for Quest
+      tex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
       tex.needsUpdate = true;
       return new THREE.MeshStandardMaterial({
         map: tex,
@@ -588,7 +588,6 @@
       const gain = ctx.createGain();
       gain.gain.value = 0.0;
 
-      // cheaper panner than HRTF on mobile
       const panner = ctx.createPanner();
       panner.panningModel = "equalpower";
       panner.distanceModel = "inverse";
@@ -693,7 +692,6 @@
       audioCtx.listener.positionY.value = p.y;
       audioCtx.listener.positionZ.value = p.z;
 
-      // orientation (camera works in both desktop + XR in three)
       const fwd = new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion).normalize();
       audioCtx.listener.forwardX.value = fwd.x;
       audioCtx.listener.forwardY.value = fwd.y;
@@ -767,7 +765,7 @@
       }
     });
 
-    // ===================== VR locomotion (robust inputSources) =====================
+    // ===================== ✅ VR locomotion (fixed direction basis) =====================
     const MOVE_DEADZONE = 0.18;
     const SNAP_DEADZONE = 0.65;
     const SNAP_ANGLE = Math.PI / 6; // 30°
@@ -780,11 +778,9 @@
         if (!src || !src.gamepad) continue;
         if (src.handedness !== handedness) continue;
         const axes = src.gamepad.axes || [];
-        // Most common: [0,1]=stick. Some runtimes use [2,3].
         if (axes.length >= 2){
           const a0 = axes[0], a1 = axes[1];
           const a2 = axes[2], a3 = axes[3];
-          // choose the pair with larger magnitude (helps if layout differs)
           const m01 = (a0*a0 + a1*a1);
           const m23 = (a2!==undefined && a3!==undefined) ? (a2*a2 + a3*a3) : -1;
           if (m23 > m01) return { x: a2 || 0, y: a3 || 0, raw: axes };
@@ -792,6 +788,14 @@
         }
       }
       return null;
+    }
+
+    // Helper: normalize stick so diagonals aren't faster
+    function stickVector(x, y, deadzone){
+      const mag = Math.sqrt(x*x + y*y);
+      if (mag <= deadzone) return { x:0, y:0, mag:0 };
+      const inv = 1 / mag;
+      return { x:x*inv, y:y*inv, mag };
     }
 
     function applyVRLocomotion(dt){
@@ -804,36 +808,41 @@
       const ly = left ? left.y : 0;
       const rx = right ? right.x : 0;
 
-      // headset yaw basis
-      const xrCam = renderer.xr.getCamera(camera);
-      const headQuat = xrCam.quaternion;
+      // ✅ Use rig yaw (yawObject) as movement basis.
+      // This stays consistent with snap turn and avoids "weird directions".
+      const rigQuat = yawObject.quaternion;
 
-      const fwd = new THREE.Vector3(0,0,-1).applyQuaternion(headQuat);
+      const fwd = new THREE.Vector3(0,0,-1).applyQuaternion(rigQuat);
       fwd.y = 0; fwd.normalize();
-      const rgt = new THREE.Vector3(1,0,0).applyQuaternion(headQuat);
+
+      const rgt = new THREE.Vector3(1,0,0).applyQuaternion(rigQuat);
       rgt.y = 0; rgt.normalize();
 
-      const mag = Math.sqrt(lx*lx + ly*ly);
-      if (mag > MOVE_DEADZONE){
+      // normalized stick
+      const s = stickVector(lx, ly, MOVE_DEADZONE);
+      if (s.mag > 0){
         const speed = 4.2;
         const move = new THREE.Vector3();
-        move.addScaledVector(rgt, lx * speed * dt);
-        move.addScaledVector(fwd, (-ly) * speed * dt);
+        // note: ly is usually +down, so forward is (-ly)
+        move.addScaledVector(rgt, s.x * speed * dt);
+        move.addScaledVector(fwd, (-s.y) * speed * dt);
         moveWithCollisions(yawObject.position, move);
       }
 
+      // snap turn (rig yaw) stays aligned with movement basis
       snapCooldown = Math.max(0, snapCooldown - dt);
       if (snapCooldown <= 0 && Math.abs(rx) > SNAP_DEADZONE){
         yawObject.rotation.y -= Math.sign(rx) * SNAP_ANGLE;
         snapCooldown = 0.28;
       }
 
-      // small HUD debug so you can see if sticks are being read
+      // HUD
       const leftTxt = left ? `L(${lx.toFixed(2)}, ${ly.toFixed(2)})` : "L(none)";
       const rightTxt = right ? `R(${rx.toFixed(2)})` : "R(none)";
       hud.textContent =
-        (renderer.xr.isPresenting ? "VR mode\n" : "Desktop mode\n") +
-        "Desktop: WASD + mouse\nVR: Left stick move, Right stick snap turn\n" +
+        "VR mode\n" +
+        "Move is relative to snap-turn direction (logical forward)\n" +
+        "Left stick move, Right stick snap turn\n" +
         leftTxt + "  " + rightTxt;
     }
 
@@ -916,7 +925,6 @@
         setStatus("Running ✅\nPer-wall images + audio active.\n\nTap 'Enter VR' (Quest Browser) when ready.");
         fadeOverlayOut();
 
-        // Enable VR button now that we’re ready
         vrBtn.style.display = "block";
         await refreshVRButton();
 
@@ -968,7 +976,6 @@
 
         hud.textContent = "Desktop mode\nDesktop: WASD + mouse\nVR: Left stick move, Right stick snap turn";
       } else {
-        // VR
         applyVRLocomotion(dt);
       }
 
@@ -977,7 +984,6 @@
       renderer.render(scene, camera);
     }
 
-    // ✅ Critical: WebXR-friendly loop
     renderer.setAnimationLoop(frame);
 
     addEventListener("resize", () => {
